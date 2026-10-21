@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LogScope — Web Server Log Analytics</title>
+  
+  <!-- Modern Dark Theme Stylesheet -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  
+  <!-- Bundled Local Chart.js for High-Resolution Visualizations -->
+  <script src="{{ url_for('static', filename='js/chart.umd.min.js') }}"></script>
+  
+  <!-- Frontend Controller Script -->
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+</head>
+<body>
+  <div class="app-wrapper">
+
+    <!-- ==========================================
+         A. HEADER
+         ========================================== -->
+    <header class="app-header">
+      <div class="brand-group">
+        <div class="brand-badge">LS</div>
+        <div class="brand-text">
+          <h1><span class="product-name">LogScope</span></h1>
+          <p>Web Server Log Analytics · Powered by Java &amp; Apache Hadoop MapReduce</p>
+        </div>
+      </div>
+
+      <div class="header-status-area">
+        <div id="engineStatusPill" class="status-pill {{ 'degraded' if health.status == 'degraded' else ('unavailable' if not health.is_ready else '') }}">
+          <span class="status-dot"></span>
+          <span id="engineStatusText">
+            {% if health.is_ready %}
+              Hadoop MapReduce Engine: Ready
+            {% elif health.status == 'degraded' %}
+              Hadoop: Degraded
+            {% else %}
+              Hadoop: Unavailable
+            {% endif %}
+          </span>
+        </div>
+        <div id="engineMetaChip" class="meta-chip">
+          {{ health.hadoop_version.split(' ')[0] ~ ' ' ~ health.hadoop_version.split(' ')[1] if health.hadoop_version else 'Hadoop Local Mode' }}
+        </div>
+      </div>
+    </header>
+
+    <!-- ==========================================
+         D & E. LOG INPUT & EXECUTION CONTROLS
+         ========================================== -->
+    <section class="action-card">
+      <div class="action-card-header">
+        <h2>⚡ MapReduce Job Controls</h2>
+        <p>Trigger a real Java MapReduce job on Apache Hadoop using the sample access log or upload your own web server log.</p>
+      </div>
+
+      <div class="input-options-container">
+        <div class="upload-zone">
+          <label class="file-select-btn" id="fileSelectBtn">
+            📂 Choose Log File
+            <input type="file" id="logFileInput" accept=".log,.txt">
+          </label>
+
+          <div class="selected-file-display">
+            <span id="selectedFileName">input/access.log (Default Sample)</span>
+            <span id="selectedFileSize" class="badge">Original dataset</span>
+          </div>
+
+          <button type="button" class="sample-toggle-btn" id="useSampleBtn" style="display: none;">
+            ↺ Reset to Default Sample
+          </button>
+        </div>
+
+        <div>
+          <button type="button" class="btn-analyze" id="analyzeBtn">
+            <span class="spinner" id="analyzeBtnSpinner" style="display: none;"></span>
+            <span id="analyzeBtnText">▶ Analyze Logs</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Live Execution Banner -->
+      <div id="executionBanner" class="execution-banner {{ 'success' if last_run.status == 'success' else ('failed' if last_run.status == 'failed' else '') }}">
+        <div id="bannerMessage">
+          {% if last_run.status == 'success' %}
+            ✓ <b>Loaded Hadoop Output:</b> Source <b>{{ last_run.source_name }}</b> ({{ last_run.results.total_requests }} requests processed).
+          {% elif last_run.status == 'failed' %}
+            ⚠️ <b>Analysis Failed:</b> {{ last_run.error }}
+          {% else %}
+            Ready to execute Java MapReduce job.
+          {% endif %}
+        </div>
+        <div id="bannerMeta">
+          {% if last_run.status == 'success' and last_run.timestamp %}
+            Analyzed: {{ last_run.timestamp }}
+          {% else %}
+            Local Hadoop Cluster
+          {% endif %}
+        </div>
+      </div>
+    </section>
+
+    <!-- ==========================================
+         B. KPI METRICS CARDS
+         ========================================== -->
+    <section class="kpi-grid">
+      <!-- Total Requests -->
+      <article class="kpi-card blue">
+        <div class="kpi-header">
+          <span>Total Requests</span>
+          <div class="kpi-icon">📊</div>
+        </div>
+        <div class="kpi-value" id="kpiTotalRequests">
+          {{ last_run.results.total_requests if last_run.results else 0 }}
+        </div>
+        <div class="kpi-footer">
+          <span id="kpiTotalRequestsSub">
+            {% if last_run.results and last_run.results.raw_lines %}
+              {{ last_run.results.total_requests }} of {{ last_run.results.raw_lines }} entries matched ({{ last_run.results.match_percentage }}%)
+            {% else %}
+              Processed MapReduce records
+            {% endif %}
+          </span>
+        </div>
+      </article>
+
+      <!-- Unique URLs -->
+      <article class="kpi-card teal">
+        <div class="kpi-header">
+          <span>Unique URLs</span>
+          <div class="kpi-icon">🔗</div>
+        </div>
+        <div class="kpi-value" id="kpiUniqueUrls">
+          {{ last_run.results.unique_urls if last_run.results else 0 }}
+        </div>
+        <div class="kpi-footer">
+          <span>Distinct resource endpoints</span>
+        </div>
+      </article>
+
+      <!-- Distinct Client IPs -->
+      <article class="kpi-card green">
+        <div class="kpi-header">
+          <span>Distinct IP Addresses</span>
+          <div class="kpi-icon">🖥️</div>
+        </div>
+        <div class="kpi-value" id="kpiUniqueIps">
+          {{ last_run.results.unique_ips if last_run.results else 0 }}
+        </div>
+        <div class="kpi-footer">
+          <span>Unique client machines</span>
+        </div>
+      </article>
+
+      <!-- HTTP Status Categories -->
+      <article class="kpi-card amber">
+        <div class="kpi-header">
+          <span>Status Categories</span>
+          <div class="kpi-icon">🏷️</div>
+        </div>
+        <div class="kpi-value" id="kpiStatusCategories">
+          {{ last_run.results.status_categories_count if last_run.results else 0 }}
+        </div>
+        <div class="kpi-footer">
+          <span id="kpiStatusCategoriesSub">
+            {% if last_run.results %}
+              HTTP Errors (4xx/5xx): {{ last_run.results.error_count }} ({{ last_run.results.error_rate }}%)
+            {% else %}
+              2xx, 4xx, 5xx series
+            {% endif %}
+          </span>
+        </div>
+      </article>
+    </section>
+
+    <!-- ==========================================
+         C. REQUEST ANALYTICS (CHARTS)
+         ========================================== -->
+    <div class="analytics-grid">
+      <!-- URLs Panel -->
+      <section class="panel-card">
+        <div class="panel-header">
+          <div class="panel-title">
+            <h3>Most Requested URLs</h3>
+            <p>Request distribution across web endpoints</p>
+          </div>
+          <span class="panel-tag">URL METRICS</span>
+        </div>
+
+        <div class="chart-wrapper">
+          <canvas id="urlChart" style="display: none;"></canvas>
+          <div id="urlListContainer" class="css-chart-list">
+            {% if last_run.results and last_run.results.urls %}
+              {% set max_val = last_run.results.urls.values() | max %}
+              {% for url, count in last_run.results.urls.items() %}
+                <div class="bar-row">
+                  <div class="bar-info">
+                    <code>{{ url }}</code>
+                    <b>{{ count }} <span style="font-size:11px;color:var(--text-muted)">({{ ((count / last_run.results.total_requests) * 100) | round(1) }}%)</span></b>
+                  </div>
+                  <div class="bar-track">
+                    <div class="bar-fill" style="width: {{ ((count / [max_val, 1] | max) * 100) | round }}%"></div>
+                  </div>
+                </div>
+              {% endfor %}
+            {% else %}
+              <div class="empty-state">No URL data available. Run analysis to populate metrics.</div>
+            {% endif %}
+          </div>
+        </div>
+      </section>
+
+      <!-- HTTP Status Distribution Panel -->
+      <section class="panel-card">
+        <div class="panel-header">
+          <div class="panel-title">
+            <h3>HTTP Status Distribution</h3>
+            <p>Response breakdown by HTTP status code</p>
+          </div>
+          <span class="panel-tag">STATUS CODES</span>
+        </div>
+
+        <div class="chart-wrapper">
+          <canvas id="statusChart" style="display: none;"></canvas>
+          <div id="statusListContainer" class="status-list">
+            {% if last_run.results and last_run.results.statuses %}
+              {% set status_names = {'200': 'OK (Success)', '404': 'Not Found', '500': 'Internal Server Error'} %}
+              {% set max_status = last_run.results.statuses.values() | max %}
+              {% for code, count in last_run.results.statuses.items() %}
+                {% set cls = 'status-200' if code.startswith('2') else ('status-404' if code.startswith('4') else ('status-500' if code.startswith('5') else 'status-3xx')) %}
+                <div class="status-item">
+                  <span class="status-badge {{ cls }}">{{ code }}</span>
+                  <div class="status-meta">
+                    <div class="status-name">{{ status_names.get(code, 'HTTP Response') }}</div>
+                    <div class="status-bar-track">
+                      <div class="status-bar-fill {{ cls }}" style="width: {{ ((count / [max_status, 1] | max) * 100) | round }}%"></div>
+                    </div>
+                  </div>
+                  <span class="status-count">{{ count }}</span>
+                </div>
+              {% endfor %}
+            {% else %}
+              <div class="empty-state">No HTTP status data available.</div>
+            {% endif %}
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ==========================================
+         C. CLIENT IP ADDRESS ANALYTICS (TABLE)
+         ========================================== -->
+    <section class="panel-card table-panel">
+      <div class="panel-header">
+        <div class="panel-title">
+          <h3>Requests by Client IP Address</h3>
+          <p>Traffic volume generated per unique client host</p>
+        </div>
+        <span class="panel-tag">CLIENT TRAFFIC</span>
+      </div>
+
+      <div class="table-responsive">
+        <table>
+          <thead>
+            <tr>
+              <th>Client IP Address</th>
+              <th>Request Count</th>
+              <th>Share of Total Traffic</th>
+            </tr>
+          </thead>
+          <tbody id="ipTableBody">
+            {% if last_run.results and last_run.results.ips %}
+              {% for item in last_run.results.ips %}
+                <tr>
+                  <td>
+                    <div class="ip-pill">
+                      <span class="ip-tag">CLIENT</span>
+                      <code>{{ item.ip }}</code>
+                    </div>
+                  </td>
+                  <td><b>{{ item.count }}</b></td>
+                  <td>
+                    <div class="share-cell">
+                      <div class="share-track">
+                        <div class="share-fill" style="width: {{ item.percentage }}%"></div>
+                      </div>
+                      <span class="share-text">{{ item.percentage }}%</span>
+                    </div>
+                  </td>
+                </tr>
+              {% endfor %}
+            {% else %}
+              <tr>
+                <td colspan="3" class="empty-state">No client IP records available. Run analysis to populate table.</td>
+              </tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ==========================================
+         ARCHITECTURE / PIPELINE FOOTER
+         ========================================== -->
+    <footer class="pipeline-footer">
+      <div>
+        <b>Hadoop MapReduce Pipeline:</b>
+      </div>
+      <div class="pipeline-flow">
+        <span class="pipeline-step">Input: access.log</span>
+        <span class="pipeline-arrow">➔</span>
+        <span class="pipeline-step">LogMapper.java (Regex Split)</span>
+        <span class="pipeline-arrow">➔</span>
+        <span class="pipeline-step">Shuffle &amp; Sort (TOTAL, URL, STATUS, IP)</span>
+        <span class="pipeline-arrow">➔</span>
+        <span class="pipeline-step">SumReducer.java</span>
+        <span class="pipeline-arrow">➔</span>
+        <span class="pipeline-step">output/part-r-00000</span>
+        <span class="pipeline-arrow">➔</span>
+        <span class="pipeline-step">Flask Dashboard UI</span>
+      </div>
+    </footer>
+
+  </div>
+
+  <!-- ==========================================
+       MODAL: EXECUTION ERROR DETAILS
+       ========================================== -->
+  <div id="errorModal" class="modal-overlay hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>⚠️ MapReduce Execution Warning</h3>
+        <button class="modal-close-btn" id="modalCloseBtn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-error-message" id="modalErrorMsg">An error occurred during Hadoop execution.</div>
+        <div class="modal-trace-box" id="modalTraceBox">Trace details...</div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="modalDismissBtn">Dismiss</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pass initial state from server to client -->
+  <script>
+    window.__INITIAL_RESULTS__ = {{ last_run.results | tojson if last_run.results else 'null' }};
+  </script>
+</body>
+</html>
